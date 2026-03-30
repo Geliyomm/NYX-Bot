@@ -1,5 +1,4 @@
 require('dotenv').config();
-const express = require('express');
 const { 
     Client, GatewayIntentBits, Partials, PermissionsBitField, EmbedBuilder, 
     ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, 
@@ -7,209 +6,226 @@ const {
     Events, MessageFlags 
 } = require('discord.js');
 const Database = require('better-sqlite3');
+const express = require('express');
 
-// --- 1. WEB SUNUCUSU (Render'ı Uyanık Tutmak İçin) ---
+// --- 1. ALTYAPI ---
 const app = express();
-const port = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('NYX-BOT Aktif! 🚀'));
+app.listen(process.env.PORT || 3000);
 
-app.get('/', (req, res) => {
-    res.send('NYX-BOT 7/24 Aktif ve Çalışıyor! 🚀');
-});
-
-app.listen(port, () => {
-    console.log(`📡 Web sunucusu ${port} portunda yayında.`);
-});
-
-// --- 2. VERİTABANI BAĞLANTISI ---
 const db = new Database('database.sqlite');
 db.prepare('CREATE TABLE IF NOT EXISTS ticket_stats (user_id TEXT PRIMARY KEY, count INTEGER DEFAULT 0)').run();
 
-// --- 3. BOT İSTEMCİSİ VE INTENTLER ---
+// --- 2. BOT AYARLARI ---
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds, 
         GatewayIntentBits.GuildMessages, 
         GatewayIntentBits.MessageContent, 
-        GatewayIntentBits.GuildMembers, 
-        GatewayIntentBits.GuildPresences
+        GatewayIntentBits.GuildMembers
     ],
     partials: [Partials.Channel, Partials.Message, Partials.User, Partials.GuildMember]
 });
 
-// --- 4. AYARLAR ---
+// --- 3. AYARLAR (ID'LER) ---
 const ANA_YETKILI_ROL_ID = "1470469302892232784";    
 const TICKET_YETKILI_ROL_ID = "1488156765857124383"; 
 
-// --- 5. ETKİNLİKLER (EVENTS) ---
-
-// Oto-Rol (Unwhitelist)
-client.on(Events.GuildMemberAdd, async (member) => {
-    try {
-        console.log(`🆕 Yeni üye katıldı: ${member.user.tag}`);
-        const unWlRole = member.guild.roles.cache.find(r => r.name === 'Unwhitelist');
-        if (unWlRole) {
-            await member.roles.add(unWlRole);
-        }
-    } catch (e) {
-        console.log("❌ Oto-rol hatası: Botun yetkisi yetersiz veya rol bulunamadı.");
-    }
-});
-
-// Bot Hazır Olduğunda
+// --- 4. BOT HAZIR ---
 client.once(Events.ClientReady, async (c) => {
     console.log(`✅ NYX SİSTEMİ ÇEVRİMİÇİ: ${c.user.tag}`);
     try {
         const guild = client.guilds.cache.get(process.env.GUILD_ID);
         if (guild) {
             await guild.commands.set([
-                { name: 'kurulum', description: 'Kategorileri ve izinli rolleri kurar.' },
-                { name: 'kanal-sil', description: 'Sunucudaki tüm kanalları temizler.' },
-                { name: 'wl-kur', description: 'Whitelist başvuru mesajını gönderir.' },
-                { name: 'ticket-kur', description: 'Gelişmiş Ticket sistemini kurar.' },
-                { name: 'ticket-sayi', description: 'Kapatılan ticket sayısını gösterir.' }
+                { name: 'kurulum', description: 'Sunucu sistemlerini kurar.' },
+                { name: 'kanal-sil', description: 'Tüm kanalları siler.' },
+                { name: 'wl-kur', description: 'Gelişmiş Whitelist başvuru mesajı.' },
+                { name: 'ticket-kur', description: 'Kategorili Ticket sistemini kurar.' },
+                { name: 'ticket-sayi', description: 'Kapatılan ticket istatistikleri.' },
+                { name: 'aktif', description: 'Sunucu Aktif duyurusu.' },
+                { name: 'kapali', description: 'Sunucu Kapalı duyurusu.' },
+                { name: 'bakim', description: 'Sunucu Bakım duyurusu.' }
             ]);
-            console.log("🚀 Slash komutları başarıyla tanımlandı.");
+            console.log("🚀 Tüm komutlar başarıyla senkronize edildi.");
         }
-    } catch (err) {
-        console.log("❌ Komut yükleme hatası:", err.message);
-    }
+    } catch (err) { console.log("Komut yükleme hatası:", err); }
 });
 
-// Etkileşimler (Interaction)
+// --- 5. ANA ETKİLEŞİM BLOĞU ---
 client.on(Events.InteractionCreate, async (interaction) => {
-    
-    // SLASH KOMUTLARI
+    const isAuth = interaction.member?.roles.cache.has(ANA_YETKILI_ROL_ID);
+
+    // --- SLASH KOMUTLARI ---
     if (interaction.isChatInputCommand()) {
         const { commandName } = interaction;
 
+        // TICKET SAYI KOMUTU (DÜZELTİLDİ)
         if (commandName === 'ticket-sayi') {
-            if (!interaction.member.roles.cache.has(ANA_YETKILI_ROL_ID) && !interaction.member.roles.cache.has(TICKET_YETKILI_ROL_ID)) {
-                return interaction.reply({ content: "❌ Yetkiniz yok!", flags: [MessageFlags.Ephemeral] });
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+            try {
+                const row = db.prepare('SELECT count FROM ticket_stats WHERE user_id = ?').get(interaction.user.id);
+                const count = row ? row.count : 0;
+                return interaction.editReply({ content: `📊 Toplam kapattığınız ticket sayısı: **${count}**` });
+            } catch (e) {
+                return interaction.editReply({ content: "❌ İstatistikler alınırken bir hata oluştu." });
             }
-            const row = db.prepare('SELECT count FROM ticket_stats WHERE user_id = ?').get(interaction.user.id);
-            return interaction.reply({ content: `📊 Toplam kapatılan ticket: **${row ? row.count : 0}**`, flags: [MessageFlags.Ephemeral] });
         }
 
-        if (!interaction.member.roles.cache.has(ANA_YETKILI_ROL_ID)) return interaction.reply({ content: "❌ Sadece Ana Yetkili!", flags: [MessageFlags.Ephemeral] });
-
-        if (commandName === 'kanal-sil') {
-            await interaction.reply({ content: "⚠️ Kanallar temizleniyor...", flags: [MessageFlags.Ephemeral] });
-            const channels = await interaction.guild.channels.fetch();
-            for (const ch of channels.values()) { try { await ch.delete(); } catch(e){} }
-        }
-
-        if (commandName === 'kurulum') {
-            await interaction.reply({ content: "⏳ Sistem ve roller kuruluyor...", flags: [MessageFlags.Ephemeral] });
-            
-            let wlRole = interaction.guild.roles.cache.find(r => r.name === 'Whitelist') || await interaction.guild.roles.create({ name: 'Whitelist', color: 'Green' });
-            let unWlRole = interaction.guild.roles.cache.find(r => r.name === 'Unwhitelist') || await interaction.guild.roles.create({ name: 'Unwhitelist', color: 'Grey' });
-
-            const c1 = await interaction.guild.channels.create({
-                name: '🚪 GİRİŞ & KAYIT',
-                type: ChannelType.GuildCategory,
-                permissionOverwrites: [
-                    { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                    { id: unWlRole.id, allow: [PermissionsBitField.Flags.ViewChannel] },
-                    { id: wlRole.id, allow: [PermissionsBitField.Flags.ViewChannel] }
-                ]
-            });
-            await interaction.guild.channels.create({ name: '📋-başvuru-yap', parent: c1.id, type: ChannelType.GuildText });
-
-            const c2 = await interaction.guild.channels.create({
-                name: '🆘 DESTEK SİSTEMİ',
-                type: ChannelType.GuildCategory,
-                permissionOverwrites: [
-                    { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                    { id: wlRole.id, allow: [PermissionsBitField.Flags.ViewChannel] },
-                    { id: ANA_YETKILI_ROL_ID, allow: [PermissionsBitField.Flags.ViewChannel] }
-                ]
-            });
-            await interaction.guild.channels.create({ name: '🎫-ticket-aç', parent: c2.id, type: ChannelType.GuildText });
-            await interaction.guild.channels.create({ name: '📑-başvuru-log', parent: c2.id, type: ChannelType.GuildText });
-
-            return interaction.editReply("✅ Kurulum bitti. Roller ve kategoriler hazır.");
-        }
-
-        if (commandName === 'wl-kur') {
-            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('wl_start').setLabel('Başvuru Yap').setStyle(ButtonStyle.Success).setEmoji('📝'));
-            return interaction.reply({ content: "**Whitelist başvurusu için butona tıklayın:**", components: [row] });
-        }
-
+        // TICKET KUR KOMUTU
         if (commandName === 'ticket-kur') {
-            const row = new ActionRowBuilder().addComponents(new StringSelectMenuBuilder().setCustomId('tk_menu').addOptions([{ label: 'Destek Al', value: 'd', emoji: '🎫' }]));
-            return interaction.reply({ content: "**Ticket açmak için seçim yapın:**", components: [row] });
+            if (!isAuth) return interaction.reply({ content: "❌ Yetkiniz yok!", flags: [MessageFlags.Ephemeral] });
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+
+            const embed = new EmbedBuilder()
+                .setTitle("NYX-RP Destek Sistemi")
+                .setDescription("Lütfen destek almak istediğiniz konuyu aşağıdan seçiniz.\n\n1️⃣ Oyun İçi Destek\n2️⃣ Oyun Dışı Destek\n3️⃣ Donate Satın Alım\n4️⃣ Diğer")
+                .setColor(0x2B2D31);
+            
+            const menu = new ActionRowBuilder().addComponents(
+                new StringSelectMenuBuilder()
+                    .setCustomId('tk_menu')
+                    .setPlaceholder('Destek kategorisi seçiniz...')
+                    .addOptions([
+                        { label: 'Oyun İçi Destek', value: 'oyun_ici', emoji: '🎮' },
+                        { label: 'Oyun Dışı Destek', value: 'oyun_disi', emoji: '💬' },
+                        { label: 'Donate Satın Alım', value: 'donate', emoji: '💰' },
+                        { label: 'Diğer', value: 'diger', emoji: '❓' }
+                    ])
+            );
+
+            return interaction.editReply({ embeds: [embed], components: [menu] });
+        }
+
+        // DURUM KOMUTLARI
+        if (['aktif', 'kapali', 'bakim'].includes(commandName)) {
+            if (!isAuth) return interaction.reply({ content: "❌ Yetkiniz yok!", flags: [MessageFlags.Ephemeral] });
+            let title, desc, color;
+            if (commandName === 'aktif') { title = "✅ SUNUCU AKTİF"; desc = `Sunucumuz açılmıştır!\n**IP:** \`${process.env.IP_ADRESI}\``; color = 0x00FF00; }
+            if (commandName === 'kapali') { title = "❌ SUNUCU KAPALI"; desc = "Sunucumuz şu an kapalıdır."; color = 0xFF0000; }
+            if (commandName === 'bakim') { title = "🛠️ SUNUCU BAKIMDA"; desc = "Sunucumuz bakımdadır."; color = 0xFFAA00; }
+            const embed = new EmbedBuilder().setTitle(title).setDescription(desc).setColor(color).setImage(process.env.SUNUCU_RESIM || null).setTimestamp();
+            return interaction.reply({ embeds: [embed] });
+        }
+
+        // WL-KUR KOMUTU
+        if (commandName === 'wl-kur') {
+            if (!isAuth) return interaction.reply({ content: "❌ Yetkiniz yok!", flags: [MessageFlags.Ephemeral] });
+            const embed = new EmbedBuilder().setTitle("NYX-RP Whitelist Başvuru").setDescription("Kayıt olmak için aşağıdaki butona tıklayıp formu doldurunuz.").setColor(0x5865F2);
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('wl_start').setLabel('Başvuru Yap').setStyle(ButtonStyle.Success).setEmoji('📝'));
+            return interaction.reply({ embeds: [embed], components: [row] });
+        }
+
+        // KURULUM KOMUTU
+        if (commandName === 'kurulum') {
+            if (!isAuth) return interaction.reply({ content: "❌ Yetkiniz yok!", flags: [MessageFlags.Ephemeral] });
+            await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+            try {
+                let wlRole = interaction.guild.roles.cache.find(r => r.name === 'Whitelist') || await interaction.guild.roles.create({ name: 'Whitelist', color: 'Green' });
+                let unWlRole = interaction.guild.roles.cache.find(r => r.name === 'Unwhitelist') || await interaction.guild.roles.create({ name: 'Unwhitelist', color: 'Grey' });
+                const cat1 = await interaction.guild.channels.create({ name: '🚪 GİRİŞ & KAYIT', type: ChannelType.GuildCategory });
+                await interaction.guild.channels.create({ name: '📋-başvuru-yap', parent: cat1.id, type: ChannelType.GuildText });
+                const cat2 = await interaction.guild.channels.create({ name: '🆘 DESTEK SİSTEMİ', type: ChannelType.GuildCategory });
+                await interaction.guild.channels.create({ name: '🎫-ticket-aç', parent: cat2.id, type: ChannelType.GuildText });
+                await interaction.guild.channels.create({ name: '📑-başvuru-log', parent: cat2.id, type: ChannelType.GuildText });
+                return interaction.editReply("✅ Sistem başarıyla kuruldu.");
+            } catch (e) { return interaction.editReply("❌ Kurulum sırasında bir hata oluştu."); }
         }
     }
 
-    // TICKET SİSTEMİ
+    // --- TICKET MENÜ SEÇİMİ ---
     if (interaction.isStringSelectMenu() && interaction.customId === 'tk_menu') {
+        const category = interaction.values[0];
+        let categoryName = category === 'oyun_ici' ? "Oyun İçi" : category === 'oyun_disi' ? "Oyun Dışı" : category === 'donate' ? "Donate" : "Diğer";
+
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
-        const ch = await interaction.guild.channels.create({
-            name: `ticket-${interaction.user.username}`,
-            type: ChannelType.GuildText,
-            permissionOverwrites: [
-                { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
-                { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-                { id: TICKET_YETKILI_ROL_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
-                { id: ANA_YETKILI_ROL_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
-            ]
-        });
-        const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('tk_close').setLabel('Yetkili-Kapat').setStyle(ButtonStyle.Danger));
-        await ch.send({ content: `<@&${TICKET_YETKILI_ROL_ID}> <@&${ANA_YETKILI_ROL_ID}>`, components: [row] });
-        return interaction.editReply(`✅ Kanal açıldı: ${ch}`);
+        try {
+            const ch = await interaction.guild.channels.create({
+                name: `${categoryName.toLowerCase().replace(" ", "-")}-${interaction.user.username}`,
+                type: ChannelType.GuildText,
+                permissionOverwrites: [
+                    { id: interaction.guild.id, deny: [PermissionsBitField.Flags.ViewChannel] },
+                    { id: interaction.user.id, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+                    { id: TICKET_YETKILI_ROL_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] },
+                    { id: ANA_YETKILI_ROL_ID, allow: [PermissionsBitField.Flags.ViewChannel, PermissionsBitField.Flags.SendMessages] }
+                ]
+            });
+
+            const row = new ActionRowBuilder().addComponents(new ButtonBuilder().setCustomId('tk_close').setLabel('Kapat').setStyle(ButtonStyle.Danger).setEmoji('🔒'));
+            const embed = new EmbedBuilder().setTitle(`Destek: ${categoryName}`).setDescription(`Hoş geldin <@${interaction.user.id}>\nKategori: **${categoryName}**\nYetkililer birazdan burada olacaktır.`).setColor(0x00FF00).setTimestamp();
+
+            await ch.send({ content: `<@&${TICKET_YETKILI_ROL_ID}> | <@${interaction.user.id}>`, embeds: [embed], components: [row] });
+            return interaction.editReply(`✅ Destek kanalınız oluşturuldu: ${ch}`);
+        } catch (e) { return interaction.editReply("❌ Kanal oluşturulurken bir hata oluştu."); }
     }
 
+    // --- TICKET KAPATMA ---
     if (interaction.isButton() && interaction.customId === 'tk_close') {
-        if (!interaction.member.roles.cache.has(TICKET_YETKILI_ROL_ID) && !interaction.member.roles.cache.has(ANA_YETKILI_ROL_ID)) return;
+        if (!interaction.member.roles.cache.has(TICKET_YETKILI_ROL_ID) && !interaction.member.roles.cache.has(ANA_YETKILI_ROL_ID)) {
+            return interaction.reply({ content: "❌ Bunu sadece yetkililer yapabilir!", flags: [MessageFlags.Ephemeral] });
+        }
         db.prepare('INSERT INTO ticket_stats (user_id, count) VALUES (?, 1) ON CONFLICT(user_id) DO UPDATE SET count = count + 1').run(interaction.user.id);
-        await interaction.reply("🔒 Ticket kapatılıyor...");
+        await interaction.reply("🔒 Kanal 5 saniye içinde siliniyor...");
         setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
     }
 
-    // WL MODAL SİSTEMİ
+    // --- WHITELIST MODAL ---
     if (interaction.isButton() && interaction.customId === 'wl_start') {
-        const modal = new ModalBuilder().setCustomId('wl_modal').setTitle('Whitelist Formu');
-        modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ic_ad').setLabel('Ad Soyad (IC)').setStyle(TextInputStyle.Short).setRequired(true)));
+        const modal = new ModalBuilder().setCustomId('wl_modal').setTitle('NYX-RP Başvuru Formu');
+        modal.addComponents(
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ic_ad').setLabel('Karakter Ad Soyad').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('yas').setLabel('OOC Yaş').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('saat').setLabel('FiveM Saati').setStyle(TextInputStyle.Short).setRequired(true)),
+            new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('hikaye').setLabel('Karakter Hikayesi').setStyle(TextInputStyle.Paragraph).setRequired(true))
+        );
         await interaction.showModal(modal);
     }
 
     if (interaction.isModalSubmit() && interaction.customId === 'wl_modal') {
-        const adVal = interaction.fields.getTextInputValue('ic_ad');
+        await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
+        const icAd = interaction.fields.getTextInputValue('ic_ad');
         const log = interaction.guild.channels.cache.find(c => c.name === '📑-başvuru-log');
-        const row = new ActionRowBuilder().addComponents(
-            new ButtonBuilder().setCustomId(`onay_${interaction.user.id}_${adVal}`).setLabel('Onayla').setStyle(ButtonStyle.Success),
+        
+        const embed = new EmbedBuilder().setTitle("Yeni Başvuru").setColor(0xFEE75C)
+            .addFields(
+                { name: "👤 Başvuran", value: `<@${interaction.user.id}>` },
+                { name: "🆔 IC İsim", value: icAd },
+                { name: "🎂 Yaş", value: interaction.fields.getTextInputValue('yas') },
+                { name: "🎮 Saat", value: interaction.fields.getTextInputValue('saat') },
+                { name: "📖 Hikaye", value: interaction.fields.getTextInputValue('hikaye') }
+            ).setTimestamp();
+
+        const btns = new ActionRowBuilder().addComponents(
+            new ButtonBuilder().setCustomId(`onay_${interaction.user.id}_${icAd}`).setLabel('Onayla').setStyle(ButtonStyle.Success),
             new ButtonBuilder().setCustomId(`red_${interaction.user.id}`).setLabel('Reddet').setStyle(ButtonStyle.Danger)
         );
-        if (log) await log.send({ content: `👤 **Başvuran:** ${interaction.user.tag}\n🆔 **IC İsim:** ${adVal}`, components: [row] });
-        return interaction.reply({ content: "✅ Başvurunuz yetkililere iletildi.", flags: [MessageFlags.Ephemeral] });
+
+        if (log) {
+            await log.send({ embeds: [embed], components: [btns] });
+            return interaction.editReply("✅ Başvurunuz yetkililere iletildi.");
+        } else {
+            return interaction.editReply("❌ Başvuru kanalı bulunamadı. Lütfen `/kurulum` yapın.");
+        }
     }
 
-    if (interaction.isButton()) {
-        const p = interaction.customId.split('_');
-        if (p[0] === 'onay' || p[0] === 'red') {
-            const [status, uid, name] = p;
-            const member = await interaction.guild.members.fetch(uid).catch(() => null);
-            if (!member) return interaction.reply({ content: "Kullanıcı sunucuda bulunamadı.", flags: [MessageFlags.Ephemeral] });
+    // --- ONAY / RED İŞLEMLERİ ---
+    if (interaction.isButton() && (interaction.customId.startsWith('onay_') || interaction.customId.startsWith('red_'))) {
+        if (!isAuth) return interaction.reply({ content: "❌ Yetkiniz yok!", flags: [MessageFlags.Ephemeral] });
+        
+        const [action, uid, charName] = interaction.customId.split('_');
+        const member = await interaction.guild.members.fetch(uid).catch(() => null);
 
-            if (status === 'onay') {
-                const wlR = interaction.guild.roles.cache.find(r => r.name === 'Whitelist');
-                const unWlR = interaction.guild.roles.cache.find(r => r.name === 'Unwhitelist');
-                
-                if (wlR) await member.roles.add(wlR).catch(e => console.log("WL Rol hatası"));
-                if (unWlR) await member.roles.remove(unWlR).catch(e => console.log("UnWL Rol hatası"));
-                
-                await member.setNickname(name).catch(e => console.log("❌ İSİM DEĞİŞMEDİ: Yetki sorunu."));
-                await member.send(`🎉 Whitelist başvurunuz onaylandı! Yeni isminiz: **${name}**`).catch(() => {});
-                await interaction.update({ content: `✅ **${member.user.tag}** onaylandı.`, components: [] });
-            } else if (status === 'red') {
-                await member.send(`❌ Whitelist başvurunuz reddedildi.`).catch(() => {});
-                await interaction.update({ content: `❌ **${member.user.tag}** reddedildi.`, components: [] });
-            }
+        if (action === 'onay' && member) {
+            const wl = interaction.guild.roles.cache.find(r => r.name === 'Whitelist');
+            const unWl = interaction.guild.roles.cache.find(r => r.name === 'Unwhitelist');
+            if (wl) await member.roles.add(wl);
+            if (unWl) await member.roles.remove(unWl);
+            await member.setNickname(charName).catch(() => {});
+            await interaction.update({ content: `✅ <@${uid}> onaylandı.`, embeds: [], components: [] });
+        } else {
+            await interaction.update({ content: `❌ İşlem tamamlandı (Reddedildi veya Üye bulunamadı).`, embeds: [], components: [] });
         }
     }
 });
 
-// --- 6. BOTU BAŞLAT ---
-client.login(process.env.TOKEN).catch(err => {
-    console.error("❌ HATA: Bot giriş yapamadı. Lütfen Token ve Intent ayarlarını kontrol et!");
-});
+client.login(process.env.TOKEN);
