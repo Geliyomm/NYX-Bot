@@ -1,33 +1,30 @@
 require('dotenv').config();
 const express = require('express');
-const app = express();
-const port = process.env.PORT || 3000;
-
-// Render'ın botu uyanık tutması için gereken basit web sunucusu
-app.get('/', (req, res) => {
-  res.send('NYX-BOT 7/24 Aktif ve Çalışıyor! 🚀');
-});
-
-app.listen(port, () => {
-  console.log(`Web sunucusu ${port} portunda yayında.`);
-});
-
-// --- MEVCUT BOT KODUNUN DEVAMI BURADAN BAŞLAYACAK ---
-// const { Client, GatewayIntentBits, ... } = require('discord.js');
-// Botun diğer tüm komutları, veritabanı bağlantıları ve login işlemleri...
 const { 
     Client, GatewayIntentBits, Partials, PermissionsBitField, EmbedBuilder, 
     ChannelType, ActionRowBuilder, ButtonBuilder, ButtonStyle, 
     StringSelectMenuBuilder, ModalBuilder, TextInputBuilder, TextInputStyle,
-    Events, MessageFlags
+    Events, MessageFlags 
 } = require('discord.js');
-require('dotenv').config();
 const Database = require('better-sqlite3');
-const db = new Database('database.sqlite');
 
-// Veritabanı Tablosu
+// --- 1. WEB SUNUCUSU (Render'ı Uyanık Tutmak İçin) ---
+const app = express();
+const port = process.env.PORT || 3000;
+
+app.get('/', (req, res) => {
+    res.send('NYX-BOT 7/24 Aktif ve Çalışıyor! 🚀');
+});
+
+app.listen(port, () => {
+    console.log(`📡 Web sunucusu ${port} portunda yayında.`);
+});
+
+// --- 2. VERİTABANI BAĞLANTISI ---
+const db = new Database('database.sqlite');
 db.prepare('CREATE TABLE IF NOT EXISTS ticket_stats (user_id TEXT PRIMARY KEY, count INTEGER DEFAULT 0)').run();
 
+// --- 3. BOT İSTEMCİSİ VE INTENTLER ---
 const client = new Client({
     intents: [
         GatewayIntentBits.Guilds, 
@@ -39,36 +36,49 @@ const client = new Client({
     partials: [Partials.Channel, Partials.Message, Partials.User, Partials.GuildMember]
 });
 
-// --- AYARLAR ---
-const ANA_YETKILI_ROL_ID = "1470469302892232784";    // Botu yöneten ana rol
-const TICKET_YETKILI_ROL_ID = "1488156765857124383"; // Ticket kapatan yetkili rolü
+// --- 4. AYARLAR ---
+const ANA_YETKILI_ROL_ID = "1470469302892232784";    
+const TICKET_YETKILI_ROL_ID = "1488156765857124383"; 
 
-// --- 1. OTO-ROL SİSTEMİ (UNWHITELIST) ---
+// --- 5. ETKİNLİKLER (EVENTS) ---
+
+// Oto-Rol (Unwhitelist)
 client.on(Events.GuildMemberAdd, async (member) => {
-    console.log(`🆕 Yeni üye katıldı: ${member.user.tag}`);
-    const unWlRole = member.guild.roles.cache.find(r => r.name === 'Unwhitelist');
-    if (unWlRole) {
-        await member.roles.add(unWlRole).catch(e => console.log("❌ Oto-rol yetki hatası."));
+    try {
+        console.log(`🆕 Yeni üye katıldı: ${member.user.tag}`);
+        const unWlRole = member.guild.roles.cache.find(r => r.name === 'Unwhitelist');
+        if (unWlRole) {
+            await member.roles.add(unWlRole);
+        }
+    } catch (e) {
+        console.log("❌ Oto-rol hatası: Botun yetkisi yetersiz veya rol bulunamadı.");
     }
 });
 
+// Bot Hazır Olduğunda
 client.once(Events.ClientReady, async (c) => {
     console.log(`✅ NYX SİSTEMİ ÇEVRİMİÇİ: ${c.user.tag}`);
-    const guild = client.guilds.cache.get(process.env.GUILD_ID);
-    if (guild) {
-        await guild.commands.set([
-            { name: 'kurulum', description: 'Kategorileri ve izinli rolleri kurar.' },
-            { name: 'kanal-sil', description: 'Sunucudaki tüm kanalları temizler.' },
-            { name: 'wl-kur', description: 'Whitelist başvuru mesajını gönderir.' },
-            { name: 'ticket-kur', description: 'Gelişmiş Ticket sistemini kurar.' },
-            { name: 'ticket-sayi', description: 'Kapatılan ticket sayısını gösterir.' }
-        ]);
+    try {
+        const guild = client.guilds.cache.get(process.env.GUILD_ID);
+        if (guild) {
+            await guild.commands.set([
+                { name: 'kurulum', description: 'Kategorileri ve izinli rolleri kurar.' },
+                { name: 'kanal-sil', description: 'Sunucudaki tüm kanalları temizler.' },
+                { name: 'wl-kur', description: 'Whitelist başvuru mesajını gönderir.' },
+                { name: 'ticket-kur', description: 'Gelişmiş Ticket sistemini kurar.' },
+                { name: 'ticket-sayi', description: 'Kapatılan ticket sayısını gösterir.' }
+            ]);
+            console.log("🚀 Slash komutları başarıyla tanımlandı.");
+        }
+    } catch (err) {
+        console.log("❌ Komut yükleme hatası:", err.message);
     }
 });
 
+// Etkileşimler (Interaction)
 client.on(Events.InteractionCreate, async (interaction) => {
     
-    // --- SLASH KOMUTLARI ---
+    // SLASH KOMUTLARI
     if (interaction.isChatInputCommand()) {
         const { commandName } = interaction;
 
@@ -94,7 +104,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             let wlRole = interaction.guild.roles.cache.find(r => r.name === 'Whitelist') || await interaction.guild.roles.create({ name: 'Whitelist', color: 'Green' });
             let unWlRole = interaction.guild.roles.cache.find(r => r.name === 'Unwhitelist') || await interaction.guild.roles.create({ name: 'Unwhitelist', color: 'Grey' });
 
-            // GİRİŞ KAYIT (Herkes görebilir ama Unwhitelist zorunlu)
             const c1 = await interaction.guild.channels.create({
                 name: '🚪 GİRİŞ & KAYIT',
                 type: ChannelType.GuildCategory,
@@ -106,7 +115,6 @@ client.on(Events.InteractionCreate, async (interaction) => {
             });
             await interaction.guild.channels.create({ name: '📋-başvuru-yap', parent: c1.id, type: ChannelType.GuildText });
 
-            // ANA KATEGORİ (Sadece Whitelist görebilir)
             const c2 = await interaction.guild.channels.create({
                 name: '🆘 DESTEK SİSTEMİ',
                 type: ChannelType.GuildCategory,
@@ -119,7 +127,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
             await interaction.guild.channels.create({ name: '🎫-ticket-aç', parent: c2.id, type: ChannelType.GuildText });
             await interaction.guild.channels.create({ name: '📑-başvuru-log', parent: c2.id, type: ChannelType.GuildText });
 
-            return interaction.editReply("✅ Kurulum bitti. Unwhitelist rolü girişe, Whitelist rolü tüm sunucuya bağlandı.");
+            return interaction.editReply("✅ Kurulum bitti. Roller ve kategoriler hazır.");
         }
 
         if (commandName === 'wl-kur') {
@@ -133,7 +141,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         }
     }
 
-    // --- 2. TICKET AÇMA/KAPATMA ---
+    // TICKET SİSTEMİ
     if (interaction.isStringSelectMenu() && interaction.customId === 'tk_menu') {
         await interaction.deferReply({ flags: [MessageFlags.Ephemeral] });
         const ch = await interaction.guild.channels.create({
@@ -158,7 +166,7 @@ client.on(Events.InteractionCreate, async (interaction) => {
         setTimeout(() => interaction.channel.delete().catch(() => {}), 5000);
     }
 
-    // --- 3. WL FORM, ONAY, ROL DEĞİŞİMİ VE İSİM ---
+    // WL MODAL SİSTEMİ
     if (interaction.isButton() && interaction.customId === 'wl_start') {
         const modal = new ModalBuilder().setCustomId('wl_modal').setTitle('Whitelist Formu');
         modal.addComponents(new ActionRowBuilder().addComponents(new TextInputBuilder().setCustomId('ic_ad').setLabel('Ad Soyad (IC)').setStyle(TextInputStyle.Short).setRequired(true)));
@@ -190,16 +198,18 @@ client.on(Events.InteractionCreate, async (interaction) => {
                 if (wlR) await member.roles.add(wlR).catch(e => console.log("WL Rol hatası"));
                 if (unWlR) await member.roles.remove(unWlR).catch(e => console.log("UnWL Rol hatası"));
                 
-                await member.setNickname(name).catch(e => console.log("❌ İSİM DEĞİŞMEDİ: Botun rolü üyenin altında veya yetkisi yok."));
-                await member.send(`🎉 Tebrikler! Whitelist başvurunuz onaylandı. Sunucudaki isminiz **${name}** yapıldı.`).catch(() => {});
-                
-                await interaction.update({ content: `✅ **${member.user.tag}** onaylandı. (İsim: ${name})`, components: [] });
+                await member.setNickname(name).catch(e => console.log("❌ İSİM DEĞİŞMEDİ: Yetki sorunu."));
+                await member.send(`🎉 Whitelist başvurunuz onaylandı! Yeni isminiz: **${name}**`).catch(() => {});
+                await interaction.update({ content: `✅ **${member.user.tag}** onaylandı.`, components: [] });
             } else if (status === 'red') {
-                await member.send(`❌ Üzgünüz, Whitelist başvurunuz reddedildi.`).catch(() => {});
+                await member.send(`❌ Whitelist başvurunuz reddedildi.`).catch(() => {});
                 await interaction.update({ content: `❌ **${member.user.tag}** reddedildi.`, components: [] });
             }
         }
     }
 });
 
-client.login(process.env.TOKEN);
+// --- 6. BOTU BAŞLAT ---
+client.login(process.env.TOKEN).catch(err => {
+    console.error("❌ HATA: Bot giriş yapamadı. Lütfen Token ve Intent ayarlarını kontrol et!");
+});
